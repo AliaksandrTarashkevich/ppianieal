@@ -1,3 +1,5 @@
+import os
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -5,11 +7,9 @@ from datetime import time
 import random
 import asyncio
 
-# 🔑 Замени это на свой токен
-TOKEN = "8193359860:AAH_qIES7VkXzj6laHXAvrmGhLaaa9sQWqs"
-
-# 🔍 Замени на свой Telegram ID (узнай через @userinfobot)
-USER_ID = 894679959
+# 🛡️ Получаем значения из переменных окружения (Railway подставит их)
+TOKEN = os.getenv("TOKEN")
+USER_ID = int(os.getenv("USER_ID"))
 
 support_messages = [
     "Отличный выбор!",
