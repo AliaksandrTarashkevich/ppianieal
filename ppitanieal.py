@@ -6,13 +6,22 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 
 # Получение переменных окружения
 TOKEN = os.getenv("TOKEN")
-USER_ID = os.getenv("USER_ID")
+USER_ID_RAW = os.getenv("USER_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-if not TOKEN or not USER_ID or not WEBHOOK_URL:
+# 🔍 Логируем, чтобы понять, что передано
+print("TOKEN:", "OK" if TOKEN else "MISSING")
+print("USER_ID:", USER_ID_RAW or "MISSING")
+print("WEBHOOK_URL:", WEBHOOK_URL or "MISSING")
+
+# Проверка наличия всех переменных
+if not TOKEN or not USER_ID_RAW or not WEBHOOK_URL:
     raise ValueError("❗ Переменные TOKEN, USER_ID и WEBHOOK_URL должны быть заданы")
 
-USER_ID = int(USER_ID)
+try:
+    USER_ID = int(USER_ID_RAW)
+except ValueError:
+    raise ValueError("❗ USER_ID должен быть числом")
 
 def is_active_hour():
     current_hour = datetime.now().hour
@@ -41,15 +50,14 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
+    print(f"✅ Устанавливаю webhook: {WEBHOOK_URL}")
     await app.bot.set_webhook(WEBHOOK_URL)
-    print(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
     await app.run_webhook(
-    listen="0.0.0.0",
-    port=8000,  # ← обязательно 8000
-    webhook_url=WEBHOOK_URL
-)
-
+        listen="0.0.0.0",
+        port=8000,
+        webhook_url=WEBHOOK_URL
+    )
 
 if __name__ == "__main__":
     import asyncio
