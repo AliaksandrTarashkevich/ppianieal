@@ -9,7 +9,11 @@ import asyncio
 
 # 🛡️ Получаем значения из переменных окружения (Railway подставит их)
 TOKEN = os.getenv("TOKEN")
-USER_ID = int(os.getenv("USER_ID"))
+user_id_raw = os.getenv("USER_ID")
+if not user_id_raw:
+    raise ValueError("❗ USER_ID переменная не установлена")
+USER_ID = int(user_id_raw)
+
 
 support_messages = [
     "Отличный выбор!",
