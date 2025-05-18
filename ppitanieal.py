@@ -4,28 +4,20 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Получение переменных окружения
+# Получаем переменные
 TOKEN = os.getenv("TOKEN")
 USER_ID_RAW = os.getenv("USER_ID")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# 🔍 Логируем, чтобы понять, что передано
 print("TOKEN:", "OK" if TOKEN else "MISSING")
 print("USER_ID:", USER_ID_RAW or "MISSING")
-print("WEBHOOK_URL:", WEBHOOK_URL or "MISSING")
 
-# Проверка наличия всех переменных
-if not TOKEN or not USER_ID_RAW or not WEBHOOK_URL:
-    raise ValueError("❗ Переменные TOKEN, USER_ID и WEBHOOK_URL должны быть заданы")
+if not TOKEN or not USER_ID_RAW:
+    raise ValueError("❗ Переменные TOKEN и USER_ID обязательны")
 
-try:
-    USER_ID = int(USER_ID_RAW)
-except ValueError:
-    raise ValueError("❗ USER_ID должен быть числом")
+USER_ID = int(USER_ID_RAW)
 
 def is_active_hour():
-    current_hour = datetime.now().hour
-    return 8 <= current_hour < 21
+    return 8 <= datetime.now().hour < 21
 
 support_messages = [
     "Отличный выбор!",
@@ -45,27 +37,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = random.choice(support_messages)
     await update.message.reply_text(reply)
 
-async def main():
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-
-    print(f"✅ Устанавливаю webhook: {WEBHOOK_URL}")
-    await app.bot.set_webhook(WEBHOOK_URL)
-
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=8000,
-        webhook_url=WEBHOOK_URL
-    )
+    print("🚀 Бот запущен в polling-режиме")
+    app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    loop.run_until_complete(main())
-
+    main()
