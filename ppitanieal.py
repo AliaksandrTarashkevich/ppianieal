@@ -45,10 +45,11 @@ async def main():
     print(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
     await app.run_webhook(
-        listen="0.0.0.0",
-        port=8080,
-        webhook_url=WEBHOOK_URL
-    )
+    listen="0.0.0.0",
+    port=8000,  # ← обязательно 8000
+    webhook_url=WEBHOOK_URL
+)
+
 
 if __name__ == "__main__":
     import asyncio
