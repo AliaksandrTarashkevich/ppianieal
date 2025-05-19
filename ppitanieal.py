@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from supabase_client import save_weight, save_steps, save_food
 
 # Получаем переменные
 TOKEN = os.getenv("TOKEN")
@@ -39,10 +40,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = random.choice(support_messages)
     await update.message.reply_text(reply)
 
+async def handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower()
+    if "вес" in text:
+        try:
+            weight = float(text.split("вес")[1].strip())
+            save_weight(update.effective_user.id, weight)
+            await update.message.reply_text(f"📉 Вес {weight} кг сохранён! Отлично держишь темп!")
+        except:
+            await update.message.reply_text("⚠️ Не смог распознать вес.")
+    elif "шаги" in text:
+        try:
+            steps = int(text.split("шаги")[1].strip())
+            save_steps(update.effective_user.id, steps)
+            await update.message.reply_text(f"🚶‍♂️ Шаги {steps} записаны. Продолжай в том же духе!")
+        except:
+            await update.message.reply_text("⚠️ Не смог распознать количество шагов.")
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^/track"), handle_track))
     print("🚀 Бот запущен в polling-режиме")
     app.run_polling()
 
