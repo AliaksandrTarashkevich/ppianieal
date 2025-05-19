@@ -40,23 +40,41 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = random.choice(support_messages)
     await update.message.reply_text(reply)
 
+import re
+
 async def handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("DEBUG текст:", repr(text))
     text = update.message.text.lower()
+    print("DEBUG текст:", repr(text))
+    user_id = update.effective_user.id
+
     if "вес" in text:
-        try:
-            weight = float(text.split("вес")[1].strip())
-            save_weight(update.effective_user.id, weight)
-            await update.message.reply_text(f"📉 Вес {weight} кг сохранён! Отлично держишь темп!")
-        except:
+        match = re.search(r"вес[^0-9\-]*([\d]+(?:[.,]\d+)?)", text)
+        if match:
+            try:
+                weight = float(match.group(1).replace(",", "."))
+                save_weight(user_id, weight)
+                await update.message.reply_text(f"📉 Вес {weight} кг сохранён! Отличная работа!")
+            except Exception as e:
+                print("Ошибка при сохранении веса:", e)
+                await update.message.reply_text("⚠️ Не удалось сохранить вес.")
+        else:
             await update.message.reply_text("⚠️ Не смог распознать вес.")
+
     elif "шаги" in text:
-        try:
-            steps = int(text.split("шаги")[1].strip())
-            save_steps(update.effective_user.id, steps)
-            await update.message.reply_text(f"🚶‍♂️ Шаги {steps} записаны. Продолжай в том же духе!")
-        except:
+        match = re.search(r"шаги[^0-9\-]*([\d]+)", text)
+        if match:
+            try:
+                steps = int(match.group(1))
+                save_steps(user_id, steps)
+                await update.message.reply_text(f"🚶 {steps} шагов записано! Так держать!")
+            except Exception as e:
+                print("Ошибка при сохранении шагов:", e)
+                await update.message.reply_text("⚠️ Не удалось сохранить шаги.")
+        else:
             await update.message.reply_text("⚠️ Не смог распознать количество шагов.")
+    else:
+        await update.message.reply_text("📎 Используй формат: /track вес 88.4 или /track шаги 10000")
+
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
