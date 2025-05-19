@@ -41,6 +41,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 async def handle_track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("DEBUG текст:", repr(text))
     text = update.message.text.lower()
     if "вес" in text:
         try:
