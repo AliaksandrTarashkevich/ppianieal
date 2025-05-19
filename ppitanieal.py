@@ -5,6 +5,9 @@ from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from supabase_client import save_weight, save_steps, save_food
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # Получаем переменные
 TOKEN = os.getenv("TOKEN")
