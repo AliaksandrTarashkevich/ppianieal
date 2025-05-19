@@ -1,6 +1,7 @@
 import os
 import random
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -17,7 +18,8 @@ if not TOKEN or not USER_ID_RAW:
 USER_ID = int(USER_ID_RAW)
 
 def is_active_hour():
-    return 8 <= datetime.now().hour < 21
+    now = datetime.now(ZoneInfo("Europe/Vilnius"))
+    return 8 <= now.hour < 21
 
 support_messages = [
     "Отличный выбор!",
