@@ -153,3 +153,47 @@ def save_food(user_id, food_text, calories):
     except Exception as e:
         print("DEBUG: Error saving food:", str(e))
         raise e
+
+def clean_duplicate_records(user_id):
+    """Очищает дублирующиеся записи для пользователя, оставляя только последнюю запись за каждый день"""
+    try:
+        print(f"DEBUG: Starting cleanup for user {user_id}")
+        # Получаем все записи пользователя, отсортированные по дате
+        response = supabase.table("Nutrition Bot")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .order("date")\
+            .execute()
+        
+        if not response.data:
+            print("DEBUG: No records found for cleanup")
+            return
+        
+        # Группируем записи по дате
+        records_by_date = {}
+        for record in response.data:
+            date = record["date"]
+            if date in records_by_date:
+                records_by_date[date].append(record)
+            else:
+                records_by_date[date] = [record]
+        
+        # Удаляем дубликаты, оставляя только последнюю запись за каждый день
+        for date, records in records_by_date.items():
+            if len(records) > 1:
+                print(f"DEBUG: Found {len(records)} records for {date}")
+                # Сортируем записи по id (предполагая, что больший id = более поздняя запись)
+                records.sort(key=lambda x: x["id"])
+                # Удаляем все записи кроме последней
+                for record in records[:-1]:
+                    print(f"DEBUG: Deleting duplicate record {record['id']} for {date}")
+                    supabase.table("Nutrition Bot")\
+                        .delete()\
+                        .eq("id", record["id"])\
+                        .execute()
+        
+        print("DEBUG: Cleanup completed successfully")
+    except Exception as e:
+        print("DEBUG: Error during cleanup:", str(e))
+        if hasattr(e, 'json'):
+            print("DEBUG: Error JSON:", e.json())
