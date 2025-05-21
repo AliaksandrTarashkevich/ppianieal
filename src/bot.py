@@ -22,21 +22,25 @@ from datetime import datetime, timedelta, date, time
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import File as TelegramFile
 from telegram.ext import (
     ApplicationBuilder, ContextTypes, filters,
     ConversationHandler, CommandHandler, MessageHandler
 )
 from telegram.error import TelegramError
 
-from clients.chatgpt_client import analyze_food
+from clients.chatgpt_client import ( 
+    analyze_food, analyze_image, is_detailed_description
+)
 from clients.supabase_client import (
     save_meal, save_weight, save_steps,
     get_last_weight, get_nutrition_for_date, get_steps_for_date,
     steps_exist_for_date, user_exists, save_user_data,
     get_user_targets, get_user_profile, supabase,
     save_burned_calories, get_burned_calories, get_image_url,
-    init_storage, set_deficit_mode
+    init_storage, set_deficit_mode, has_meals_in_timerange
 )
+
 from clients.messages import (
     STEPS_REMINDER_YESTERDAY,
     MEAL_REMINDER_MORNING,
@@ -281,24 +285,59 @@ async def ask_deficit_mode(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─────────────────── Фото еды  ─────────────────────────
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_active_hour():
-        return
-    desc = update.message.caption or "Еда без описания"
-    await update.message.reply_text("🔍 Анализирую еду…")
-    res = analyze_food(desc)
-    if not res:
-        await update.message.reply_text("⚠️ Не удалось проанализировать еду.")
-        return
-    total, br = res['total'], res['breakdown']
-    btxt = "\n".join(
-        f"- {i['item']}: {i['calories']} ккал, Б:{i['protein']:.1f}г, Ж:{i['fat']:.1f}г, У:{i['carbs']:.1f}г" for i in br)
-    msg = (
-        "🍽️ *Разбор еды:*\n"+btxt+"\n\n"+
-        f"*Итого:* {total['calories']} ккал\n"
-        f"Б:{total['protein']:.1f}г | Ж:{total['fat']:.1f}г | У:{total['carbs']:.1f}г")
-    await update.message.reply_text(msg, parse_mode='Markdown')
-    save_meal(update.effective_user.id, desc, total['calories'], total['protein'], total['fat'], total['carbs'])
+    user_id = update.effective_user.id
+    caption = update.message.caption or ""
+    await update.message.reply_text("🧠 Пытаюсь распознать по фото...")
 
+    try:
+        # Скачиваем фото
+        photo = update.message.photo[-1]  # самое большое
+        telegram_file: TelegramFile = await ctx.bot.get_file(photo.file_id)
+        image_bytes = await telegram_file.download_as_bytearray()
+
+        # Проверяем, подробное ли описание
+        if is_detailed_description(caption):
+            # Подробное описание — анализируем только его
+            result = analyze_food(caption)
+            comment = "📋 Калории рассчитаны по описанию блюда."
+        else:
+            # Описание неточное — пробуем по фото
+            result = await analyze_image(image_bytes)
+            if not result:
+                if caption.strip():
+                    # Фото не распознано, но есть описание → считаем по нему
+                    result = analyze_food(caption)
+                    comment = "⚠️ Фото не удалось распознать. Калории рассчитаны по описанию."
+                else:
+                    await update.message.reply_text("❌ Не удалось разобрать фото. Добавь описание блюда.")
+                    return
+            else:
+                comment = "📷 Калории рассчитаны по фото, могут быть неточности."
+
+        # Выводим итог
+        total = result["total"]
+        breakdown = result["breakdown"]
+        breakdown_text = "\n".join(
+            f"- {item['item']}: {item['calories']} ккал, Б: {item['protein']}г, Ж: {item['fat']}г, У: {item['carbs']}г"
+            for item in breakdown
+        )
+
+        reply_text = (
+            f"🍽️ *Разбор еды:*\n"
+            f"{breakdown_text}\n\n"
+            f"*Итого:* {total['calories']} ккал\n"
+            f"Б: {total['protein']}г | Ж: {total['fat']}г | У: {total['carbs']}г\n\n"
+            f"_{comment}_"
+        )
+        await update.message.reply_text(reply_text, parse_mode="Markdown")
+
+        # Сохраняем
+        save_meal(user_id, caption or "[Фото]", total["calories"], total["protein"], total["fat"], total["carbs"])
+
+    except Exception as e:
+        print("❌ Ошибка при разборе фото:", e)
+        await update.message.reply_text("Извините, произошла ошибка. Попробуйте ещё раз или обратитесь к администратору.")
+        
 # ─────────────────── Обработчики кнопок ─────────────────────────
 
 async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -659,9 +698,16 @@ async def send_evening_meal_reminder(ctx: ContextTypes.DEFAULT_TYPE):
             text=random.choice(MEAL_REMINDER_EVENING)
         )
 
+async def send_daily_summary(ctx: ContextTypes.DEFAULT_TYPE):
+    """Обертка для отправки ежедневного отчета"""
+    job = ctx.job
+    uid = int(job.data)
+    await send_summary(uid, ctx.bot)
+
+from datetime import time
+
 def schedule_for_user(job_queue, user_id: int):
-    """Планирует все напоминания для пользователя"""
-    # Напоминание о шагах в 09:00, если не отправлены
+    
     job_queue.run_daily(
         send_steps_reminder,
         time=time(9, 0, tzinfo=ZONE),
@@ -669,7 +715,6 @@ def schedule_for_user(job_queue, user_id: int):
         name=f"steps_reminder_{user_id}"
     )
     
-    # Напоминание о завтраке в 11:00
     job_queue.run_daily(
         send_morning_meal_reminder,
         time=time(11, 0, tzinfo=ZONE),
@@ -677,7 +722,6 @@ def schedule_for_user(job_queue, user_id: int):
         name=f"morning_meal_{user_id}"
     )
     
-    # Напоминание об обеде в 16:00
     job_queue.run_daily(
         send_afternoon_meal_reminder,
         time=time(16, 0, tzinfo=ZONE),
@@ -685,18 +729,16 @@ def schedule_for_user(job_queue, user_id: int):
         name=f"afternoon_meal_{user_id}"
     )
     
-    # Напоминание об ужине в 23:00
     job_queue.run_daily(
         send_evening_meal_reminder,
-        time=time(23, 0, tzinfo=ZONE),
+        time=time(22, 0, tzinfo=ZONE),
         data=user_id,
         name=f"evening_meal_{user_id}"
     )
     
-    # Автоматический отчёт в 23:59
     job_queue.run_daily(
         send_daily_summary,
-        time=time(23, 59, tzinfo=ZONE),
+        time=time(22, 30, tzinfo=ZONE),
         data=user_id,
         name=f"summary_{user_id}"
     )
@@ -732,7 +774,7 @@ async def confirm_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 await update.message.reply_photo(
                     image_url,
-                    caption="гречка 80г, курица 200g, морковь 50g, зелень"
+                    caption="гречка 80g, курица 200g, морковь 50g, зелень"
                 )
             except Exception as e:
                 print(f"❌ Failed to send example image: {e}")
