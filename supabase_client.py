@@ -2,10 +2,11 @@
 """
 Функции, которые вызываются из ppitanieal.py:
 • user_exists, save_user_data, get_user_profile
-• get_user_targets  – расчёт дневной нормы по LBM
+• get_user_targets  – расчёт дневной нормы по LBM
 • save_weight / save_steps  (+steps_exist_for_date, get_steps_for_date)
-• save_meal  – сохраняет калории/БЖУ блюда
-• get_nutrition_for_date – суммирует еду за дату
+• save_meal  – сохраняет калории/БЖУ блюда
+• get_nutrition_for_date – суммирует еду за дату
+• save_burned_calories / get_burned_calories – сохраняет/получает сожженные калории
 
 Структура таблиц (минимум):
 ┌──────────────── users ────────────────┐   ┌──────────── meals ────────────┐
@@ -19,8 +20,12 @@
 │                                       │   │ carbs numeric                 │
 └───────────────────────────────────────┘   └───────────────────────────────┘
 
-Таблица «Nutrition Bot» (weights+steps):
-│ id | user_id | date | weight numeric | steps integer │
+┌──────────── burned_calories ──────────┐   ┌─────── Nutrition Bot ─────────┐
+│ id (uuid, PK)                         │   │ id | user_id | date           │
+│ user_id text                          │   │    | weight numeric           │
+│ date date                             │   │    | steps integer            │
+│ calories integer                      │   │                               │
+└───────────────────────────────────────┘   └───────────────────────────────┘
 """
 import os
 from datetime import date
@@ -98,8 +103,7 @@ def save_weight(user_id: int, weight: float, *, date: date):
 def save_steps(user_id: int, steps: int, *, date: date):
     rec = _get_record(user_id, date)
     if rec:
-        new_steps = (rec.get("steps") or 0) + steps
-        supabase.table("Nutrition Bot").update({"steps": new_steps}).eq("id", rec['id']).execute()
+        supabase.table("Nutrition Bot").update({"steps": steps}).eq("id", rec['id']).execute()
     else:
         supabase.table("Nutrition Bot").insert({"user_id": str(user_id), "date": str(date), "steps": steps}).execute()
 
@@ -138,6 +142,43 @@ def get_nutrition_for_date(user_id: int, d: date):
         total["fat"]     += r.get("fat") or 0
         total["carbs"]   += r.get("carbs") or 0
     return total
+
+def save_burned_calories(user_id: int, calories: int, date: date) -> None:
+    """Сохраняет сожженные калории за день"""
+    try:
+        # Проверяем, есть ли уже запись за этот день
+        res = supabase.table("burned_calories").select("id") \
+            .eq("user_id", str(user_id)) \
+            .eq("date", str(date)) \
+            .execute()
+        
+        if res.data:
+            # Обновляем существующую запись
+            supabase.table("burned_calories") \
+                .update({"calories": calories}) \
+                .eq("id", res.data[0]["id"]) \
+                .execute()
+        else:
+            # Создаем новую запись
+            supabase.table("burned_calories").insert({
+                "user_id": str(user_id),
+                "date": str(date),
+                "calories": calories
+            }).execute()
+    except APIError as e:
+        print(f"❌ Failed to save burned calories: {e}")
+
+def get_burned_calories(user_id: int, date: date) -> int:
+    """Возвращает сожженные калории за день"""
+    try:
+        res = supabase.table("burned_calories").select("calories") \
+            .eq("user_id", str(user_id)) \
+            .eq("date", str(date)) \
+            .execute()
+        return res.data[0]["calories"] if res.data else 0
+    except APIError as e:
+        print(f"❌ Failed to get burned calories: {e}")
+        return 0
 
 # В самый конец файла:
 __all__ = [
