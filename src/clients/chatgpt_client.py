@@ -1,9 +1,9 @@
 import os
 import re
 import json
+from base64 import b64encode
 from openai import OpenAI
 from dotenv import load_dotenv
-from base64 import b64encode
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -23,9 +23,8 @@ def reconcile_total(data: dict) -> dict:
         calc["fat"]      += row["fat"]
         calc["carbs"]    += row["carbs"]
 
-    # если GPT-total «плавает» > 5 %
     if abs(calc["calories"] - data["total"]["calories"]) > calc["calories"] * 0.05:
-        data["total"] = calc               # подменяем кривой total
+        data["total"] = calc
     return data
 
 def analyze_food(description: str) -> dict:
@@ -61,106 +60,64 @@ def analyze_food(description: str) -> dict:
       "protein": 4.0,
       "fat": 0.4,
       "carbs": 40.0
-    }},
-    ...
+    }}
   ]
 }}
 """
-
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
-
         raw = response.choices[0].message.content.strip()
-        print("🧾 GPT raw response:\n", raw)
+        print("🧾 [analyze_food] RAW GPT OUTPUT:\n", raw)
 
-        # Если markdown-блок — чистим
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw).strip()
-
-        # Находим JSON внутри текста
         start = raw.find("{")
         end = raw.rfind("}") + 1
         json_str = raw[start:end]
 
-        print("📦 Extracted JSON:\n", json_str)
+        print("📦 [analyze_food] Extracted JSON:\n", json_str)
 
         data = json.loads(json_str)
-        data = reconcile_total(data)
-        return data
-
+        return reconcile_total(data)
     except Exception as e:
         print("❌ GPT parsing error:", e)
         return {}
 
-import re, json
-from base64 import b64encode
-
-async def analyze_image(image_bytes: bytes) -> dict:
-    """Анализирует изображение и возвращает КБЖУ"""
+async def detect_food_items_from_image(image_bytes: bytes) -> str:
+    """Определяет названия и веса продуктов по изображению"""
     try:
-        base64_image = b64encode(image_bytes).decode("utf-8")
+        encoded = b64encode(image_bytes).decode("utf-8")
+        prompt = (
+            "Посмотри на фото и назови продукты с примерным весом. "
+            "Формат: название 100г, продукт 50г. Без пояснений."
+        )
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Ты нутрициолог. Проанализируй изображение блюда и рассчитай примерное количество калорий, белков, жиров и углеводов. "
-                            "Ответ верни строго в формате JSON как указано ниже:\n"
-                            "{\n"
-                            "  \"total\": {\n"
-                            "    \"calories\": 500,\n"
-                            "    \"protein\": 25.0,\n"
-                            "    \"fat\": 20.0,\n"
-                            "    \"carbs\": 50.0\n"
-                            "  },\n"
-                            "  \"breakdown\": [\n"
-                            "    {\n"
-                            "      \"item\": \"куриная грудка\",\n"
-                            "      \"calories\": 250,\n"
-                            "      \"protein\": 25.0,\n"
-                            "      \"fat\": 5.0,\n"
-                            "      \"carbs\": 0.0\n"
-                            "    }\n"
-                            "  ]\n"
-                            "}"
-                        )
-                    }
-                ]
-            }
-        ]
+        print("📤 [detect_food_items_from_image] Sending image prompt...")
 
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=messages,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + encoded}},
+                    {"type": "text", "text": prompt}
+                ]
+            }],
             temperature=0.3,
         )
 
-        content = response.choices[0].message.content.strip()
-
-        if content.startswith("```"):
-            content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
-            content = re.sub(r"\n?```$", "", content)
-
-        data = json.loads(content)
-        return reconcile_total(data)
+        raw = response.choices[0].message.content.strip()
+        print("🖼️ [detect_food_items_from_image] RAW GPT OUTPUT:\n", raw)
+        return raw
 
     except Exception as e:
-        print(f"❌ Image parsing error: {e}")
-        return {}
+        print(f"❌ [detect_food_items_from_image] Image ingredient detection error: {e}")
+        return ""
 
 
 def is_detailed_description(text: str) -> bool:

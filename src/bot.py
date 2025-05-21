@@ -30,7 +30,7 @@ from telegram.ext import (
 from telegram.error import TelegramError
 
 from clients.chatgpt_client import ( 
-    analyze_food, analyze_image, is_detailed_description
+    analyze_food, detect_food_items_from_image, is_detailed_description
 )
 from clients.supabase_client import (
     save_meal, save_weight, save_steps,
@@ -291,53 +291,59 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Скачиваем фото
-        photo = update.message.photo[-1]  # самое большое
+        photo = update.message.photo[-1]
         telegram_file: TelegramFile = await ctx.bot.get_file(photo.file_id)
         image_bytes = await telegram_file.download_as_bytearray()
 
-        # Проверяем, подробное ли описание
         if is_detailed_description(caption):
-            # Подробное описание — анализируем только его
             result = analyze_food(caption)
             comment = "📋 Калории рассчитаны по описанию блюда."
         else:
-            # Описание неточное — пробуем по фото
-            result = await analyze_image(image_bytes)
-            if not result:
-                if caption.strip():
-                    # Фото не распознано, но есть описание → считаем по нему
-                    result = analyze_food(caption)
-                    comment = "⚠️ Фото не удалось распознать. Калории рассчитаны по описанию."
-                else:
-                    await update.message.reply_text("❌ Не удалось разобрать фото. Добавь описание блюда.")
-                    return
-            else:
-                comment = "📷 Калории рассчитаны по фото, могут быть неточности."
+            ingredients = await detect_food_items_from_image(image_bytes)
 
-        # Выводим итог
+            if ingredients and is_detailed_description(ingredients):
+                print("📷 [analyze_food after image] INPUT:", ingredients)
+                result = analyze_food(ingredients)
+                comment = "📷 Калории рассчитаны по фото, могут быть неточности."
+            elif caption.strip():
+                result = analyze_food(caption)
+                comment = "⚠️ Фото не удалось распознать. Калории рассчитаны по описанию."
+            else:
+                await update.message.reply_text("❌ Не удалось распознать блюдо. Добавь описание вручную.")
+                return
+
         total = result["total"]
         breakdown = result["breakdown"]
         breakdown_text = "\n".join(
-            f"- {item['item']}: {item['calories']} ккал, Б: {item['protein']}г, Ж: {item['fat']}г, У: {item['carbs']}г"
-            for item in breakdown
-        )
+    f"- {item['item']}: {round(item['calories'])} ккал, Б: {round(item['protein'], 1)}г, Ж: {round(item['fat'], 1)}г, У: {round(item['carbs'], 1)}г"
+    for item in breakdown
+)
+
 
         reply_text = (
             f"🍽️ *Разбор еды:*\n"
             f"{breakdown_text}\n\n"
-            f"*Итого:* {total['calories']} ккал\n"
-            f"Б: {total['protein']}г | Ж: {total['fat']}г | У: {total['carbs']}г\n\n"
+            f"*Итого:* {round(total['calories'])} ккал\n"
+f"Б: {round(total['protein'], 1)}г | Ж: {round(total['fat'], 1)}г | У: {round(total['carbs'], 1)}г"
+
             f"_{comment}_"
         )
         await update.message.reply_text(reply_text, parse_mode="Markdown")
 
-        # Сохраняем
-        save_meal(user_id, caption or "[Фото]", total["calories"], total["protein"], total["fat"], total["carbs"])
+        save_meal(
+    user_id,
+    caption or "[Фото]",
+    round(total["calories"]),
+    round(total["protein"], 1),
+    round(total["fat"], 1),
+    round(total["carbs"], 1)
+)
 
     except Exception as e:
         print("❌ Ошибка при разборе фото:", e)
-        await update.message.reply_text("Извините, произошла ошибка. Попробуйте ещё раз или обратитесь к администратору.")
-        
+        await update.message.reply_text("Произошла ошибка. Попробуйте ещё раз.")
+
+
 # ─────────────────── Обработчики кнопок ─────────────────────────
 
 async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
