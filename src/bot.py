@@ -37,6 +37,12 @@ from clients.supabase_client import (
     save_burned_calories, get_burned_calories, get_image_url,
     init_storage, set_deficit_mode
 )
+from clients.messages import (
+    STEPS_REMINDER_YESTERDAY,
+    MEAL_REMINDER_MORNING,
+    MEAL_REMINDER_AFTERNOON,
+    MEAL_REMINDER_EVENING
+)
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
@@ -613,26 +619,78 @@ async def send_summary(uid: int, target, *, target_date: date|None=None):
 
 # ───────────────── Планировщик задач ────────────────────
 async def send_steps_reminder(ctx: ContextTypes.DEFAULT_TYPE):
+    """Напоминание о шагах за вчера (09:00)"""
     job = ctx.job
     uid = int(job.data)
     yesterday = date.today() - timedelta(days=1)
     if not steps_exist_for_date(uid, yesterday):
         await ctx.bot.send_message(
             chat_id=uid,
-            text="👋 Доброе утро! Не забудь отправить шаги за вчера (подсказка: «шаги 8000 вчера»)")
+            text=random.choice(STEPS_REMINDER_YESTERDAY)
+        )
 
-async def send_daily_summary(ctx: ContextTypes.DEFAULT_TYPE):
+async def send_morning_meal_reminder(ctx: ContextTypes.DEFAULT_TYPE):
+    """Напоминание о завтраке (11:00)"""
     job = ctx.job
     uid = int(job.data)
-    await send_summary(uid, ctx.bot)
+    if not has_meals_in_timerange(uid, date.today(), 0, 10):
+        await ctx.bot.send_message(
+            chat_id=uid,
+            text=random.choice(MEAL_REMINDER_MORNING)
+        )
+
+async def send_afternoon_meal_reminder(ctx: ContextTypes.DEFAULT_TYPE):
+    """Напоминание об обеде (16:00)"""
+    job = ctx.job
+    uid = int(job.data)
+    if not has_meals_in_timerange(uid, date.today(), 11, 15):
+        await ctx.bot.send_message(
+            chat_id=uid,
+            text=random.choice(MEAL_REMINDER_AFTERNOON)
+        )
+
+async def send_evening_meal_reminder(ctx: ContextTypes.DEFAULT_TYPE):
+    """Напоминание об ужине (23:00)"""
+    job = ctx.job
+    uid = int(job.data)
+    if not has_meals_in_timerange(uid, date.today(), 16, 22):
+        await ctx.bot.send_message(
+            chat_id=uid,
+            text=random.choice(MEAL_REMINDER_EVENING)
+        )
 
 def schedule_for_user(job_queue, user_id: int):
+    """Планирует все напоминания для пользователя"""
     # Напоминание о шагах в 09:00, если не отправлены
     job_queue.run_daily(
         send_steps_reminder,
         time=time(9, 0, tzinfo=ZONE),
         data=user_id,
-        name=f"reminder_{user_id}"
+        name=f"steps_reminder_{user_id}"
+    )
+    
+    # Напоминание о завтраке в 11:00
+    job_queue.run_daily(
+        send_morning_meal_reminder,
+        time=time(11, 0, tzinfo=ZONE),
+        data=user_id,
+        name=f"morning_meal_{user_id}"
+    )
+    
+    # Напоминание об обеде в 16:00
+    job_queue.run_daily(
+        send_afternoon_meal_reminder,
+        time=time(16, 0, tzinfo=ZONE),
+        data=user_id,
+        name=f"afternoon_meal_{user_id}"
+    )
+    
+    # Напоминание об ужине в 23:00
+    job_queue.run_daily(
+        send_evening_meal_reminder,
+        time=time(23, 0, tzinfo=ZONE),
+        data=user_id,
+        name=f"evening_meal_{user_id}"
     )
     
     # Автоматический отчёт в 23:59

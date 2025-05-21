@@ -280,11 +280,37 @@ def upload_image(file_path: str, file_name: str):
     with open(file_path, 'rb') as f:
         supabase.storage.from_('nutritionbot').upload(file_name, f)
 
+def has_meals_in_timerange(user_id: int, d: date, start_hour: int, end_hour: int) -> bool:
+    """Проверяет, есть ли приемы пищи в заданном временном диапазоне."""
+    try:
+        # Формируем временные границы
+        start_time = f"{d}T{start_hour:02d}:00:00"
+        end_time = f"{d}T{end_hour:02d}:59:59"
+        
+        print(f"🔍 DEBUG: Checking meals for user {user_id} between {start_time} and {end_time}")
+        
+        # Проверяем наличие записей
+        res = supabase.table("meals") \
+            .select("id") \
+            .eq("user_id", str(user_id)) \
+            .gte("created_at", start_time) \
+            .lte("created_at", end_time) \
+            .execute()
+        
+        has_meals = bool(res.data)
+        print(f"✅ Found meals: {has_meals}")
+        return has_meals
+        
+    except Exception as e:
+        print(f"❌ Error checking meals: {e}")
+        return False  # В случае ошибки считаем, что еды не было
+
 # В самый конец файла:
 __all__ = [
     "save_meal", "save_weight", "save_steps", "get_last_weight",
     "get_nutrition_for_date", "get_steps_for_date", "steps_exist_for_date",
     "user_exists", "save_user_data", "get_user_targets", "get_user_profile",
     "save_burned_calories", "get_burned_calories",
-    "supabase"  # ← ВАЖНО: чтобы ppitanieal.py мог импортировать его
+    "supabase",
+    "has_meals_in_timerange"  # Для проверки приемов пищи
 ]
