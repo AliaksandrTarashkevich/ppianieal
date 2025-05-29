@@ -1,1 +1,1 @@
-worker: python3 ppitanieal.py
+web: python3 src/bot.py
