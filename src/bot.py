@@ -50,11 +50,17 @@ from clients.messages import (
     MEAL_REMINDER_EVENING
 )
 
+from clients.charts_client import (
+    create_weight_chart, create_calories_chart, 
+    create_macros_chart, create_activity_chart, 
+    cleanup_temp_files
+)
+
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 ZONE = ZoneInfo("Europe/Vilnius")
 
-ASK_WEIGHT, ASK_HEIGHT, ASK_GENDER, ASK_FAT, ASK_DEFICIT_MODE, CONFIRM_HELP, INPUT_WEIGHT_TODAY, INPUT_WEIGHT_YESTERDAY, INPUT_STEPS_TODAY, INPUT_STEPS_YESTERDAY, INPUT_BURN, CHANGE_DEFICIT_MODE, WEIGHT_MENU, STEPS_MENU, DELETE_MENU, DELETE_CONFIRM, SAVE_FAVORITE_MENU, FAVORITE_MEALS_MENU, FAVORITE_MEAL_SELECT = range(19)
+ASK_WEIGHT, ASK_HEIGHT, ASK_GENDER, ASK_FAT, ASK_DEFICIT_MODE, CONFIRM_HELP, INPUT_WEIGHT_TODAY, INPUT_WEIGHT_YESTERDAY, INPUT_STEPS_TODAY, INPUT_STEPS_YESTERDAY, INPUT_BURN, CHANGE_DEFICIT_MODE, WEIGHT_MENU, STEPS_MENU, DELETE_MENU, DELETE_CONFIRM, SAVE_FAVORITE_MENU, FAVORITE_MEALS_MENU, FAVORITE_MEAL_SELECT, CHARTS_MENU = range(20)
 
 # ────────────────────────── Мотивация ───────────────────────────
 WEIGHT_LOSS_MESSAGES = [
@@ -77,8 +83,9 @@ WEIGHT_GAIN_MESSAGES = [
 reply_keyboard = [
     ["⚖️ Track вес", "👣 Track шаги"],
     ["📊 Summary", "🔥 Burn"],
-    ["🍎 Любимые блюда", "🗑️ Удалить еду"],  # НОВАЯ КНОПКА
-    ["❓ Help", "⚙️ Режим"]
+    ["🍎 Любимые блюда", "📈 Графики"],  # НОВАЯ КНОПКА
+    ["🗑️ Удалить еду", "❓ Help"],
+    ["⚙️ Режим"]
 ]
 markup = ReplyKeyboardMarkup(
     reply_keyboard,
@@ -123,6 +130,13 @@ save_favorite_markup = ReplyKeyboardMarkup(save_favorite_keyboard, resize_keyboa
 # Клавиатура для работы с избранными
 favorite_back_keyboard = [["🔙 Назад"]]
 favorite_back_markup = ReplyKeyboardMarkup(favorite_back_keyboard, resize_keyboard=True)
+
+charts_keyboard = [
+    ["📉 График веса", "🔥 График калорий"],
+    ["🥗 Баланс БЖУ", "👣 Активность"],
+    ["🔙 Назад в меню"]
+]
+charts_markup = ReplyKeyboardMarkup(charts_keyboard, resize_keyboard=True)
 # ─────────────────── Helpers ──────────────────────────
 def now_vilnius():
     return datetime.now(ZONE)
@@ -511,6 +525,88 @@ async def handle_favorite_meals_menu(update: Update, ctx: ContextTypes.DEFAULT_T
     # Очищаем временные данные
     ctx.user_data.pop('favorites_list', None)
     return ConversationHandler.END
+
+async def show_charts_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню выбора графиков"""
+    await update.message.reply_text(
+        "📈 *Выберите тип графика:*\n\n"
+        "📉 *График веса* - динамика за 30 дней\n"
+        "🔥 *График калорий* - потребление за 7 дней\n" 
+        "🥗 *Баланс БЖУ* - распределение макронутриентов\n"
+        "👣 *Активность* - шаги и сожженные калории\n\n"
+        "_Генерация графика может занять несколько секунд..._",
+        parse_mode="Markdown",
+        reply_markup=charts_markup
+    )
+    return CHARTS_MENU
+
+async def handle_charts_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает выбор типа графика"""
+    txt = update.message.text
+    user_id = update.effective_user.id
+    
+    if txt == "🔙 Назад в меню":
+        await update.message.reply_text("Выберите действие:", reply_markup=markup)
+        return ConversationHandler.END
+    
+    # Показываем индикатор загрузки
+    loading_msg = await update.message.reply_text("📊 Генерирую график, подождите...")
+    
+    chart_file = None
+    chart_title = ""
+    
+    try:
+        if txt == "📉 График веса":
+            chart_file = create_weight_chart(user_id, days=30)
+            chart_title = "📉 Динамика веса за 30 дней"
+            
+        elif txt == "🔥 График калорий":
+            chart_file = create_calories_chart(user_id, days=7)  
+            chart_title = "🔥 Калории за 7 дней"
+            
+        elif txt == "🥗 Баланс БЖУ":
+            chart_file = create_macros_chart(user_id, days=7)
+            chart_title = "🥗 Баланс БЖУ за 7 дней"
+            
+        elif txt == "👣 Активность":
+            chart_file = create_activity_chart(user_id, days=7)
+            chart_title = "👣 Активность за 7 дней"
+            
+        else:
+            await loading_msg.edit_text("⚠️ Неизвестный тип графика")
+            return CHARTS_MENU
+            
+        # Удаляем сообщение о загрузке
+        await loading_msg.delete()
+        
+        if chart_file and os.path.exists(chart_file):
+            # Отправляем график
+            with open(chart_file, 'rb') as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=chart_title,
+                    reply_markup=charts_markup
+                )
+            
+            # Очищаем временный файл
+            cleanup_temp_files(user_id)
+            
+        else:
+            await update.message.reply_text(
+                "📊 Недостаточно данных для создания этого графика.\n"
+                "Попробуйте другой тип или добавьте больше записей.",
+                reply_markup=charts_markup
+            )
+            
+        return CHARTS_MENU
+        
+    except Exception as e:
+        print(f"❌ Error creating chart: {e}")
+        await loading_msg.edit_text(
+            "❌ Произошла ошибка при создании графика. Попробуйте позже.",
+            reply_markup=charts_markup
+        )
+        return CHARTS_MENU
 # ─────────────────── Обработчики кнопок ─────────────────────────
 
 async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -533,8 +629,10 @@ async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if txt == "🔥 Burn":
         await update.message.reply_text("Введи потраченные калории за активность:")
         return INPUT_BURN
-    if txt == "🍎 Любимые блюда":  # НОВЫЙ ОБРАБОТЧИК
+    if txt == "🍎 Любимые блюда":
         return await show_favorite_meals(update, ctx)
+    if txt == "📈 Графики":  # НОВЫЙ ОБРАБОТЧИК
+        return await show_charts_menu(update, ctx)
     if txt == "🗑️ Удалить еду":
         return await show_delete_menu(update, ctx)
     if txt == "❓ Help":
@@ -542,7 +640,7 @@ async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if txt == "⚙️ Режим":
         return await change_deficit_mode(update, ctx)
-
+    
 # ─────────────── Новые обработчики для ввода чисел ───────────────
 async def handle_weight_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text
@@ -854,12 +952,12 @@ async def send_help(uid: int, target):
         "📸 *1. Фото еды:*\n"
         "Просто отправь фото с кратким описанием еды.\n"
         "Пример:\n"
-        "куриная грудка 200g, кабачок 100g, масло оливковое 5g\n\n"
+        "куриная грудка 200г, кабачок 100г, масло оливковое 5г\n\n"
         
         "⚠️ Чем точнее описание (вес, состав), тем точнее подсчёт калорий!\n\n"
         
         "Пример 1 — ✅ Хорошо:\n"
-        "куриная грудка 200g, кабачок 100g, масло оливковое 5g\n\n"
+        "куриная грудка 200г, кабачок 100г, масло оливковое 5г\n\n"
         
         "Пример 2 — ❌ Плохо:\n"
         "курица с овощами (недостаточно данных)\n\n"
@@ -879,7 +977,21 @@ async def send_help(uid: int, target):
         "250\n"
         "Бот учтёт эти калории в итогах дня.\n\n"
         
-        "🆘 *5. Подсказка:*\n"
+        "🍎 *5. Любимые блюда:*\n"
+        "После анализа фото можешь сохранить блюдо в избранное.\n"
+        "Потом быстро добавляй повторяющиеся приемы пищи одним кликом!\n\n"
+        
+        "📈 *6. Графики и аналитика:*\n"  # НОВЫЙ РАЗДЕЛ
+        "Нажми кнопку 'Графики' чтобы увидеть:\n"
+        "• 📉 График веса за 30 дней\n"
+        "• 🔥 График калорий за 7 дней\n"
+        "• 🥗 Баланс БЖУ в виде диаграммы\n"
+        "• 👣 График активности и шагов\n\n"
+        
+        "🗑️ *7. Удаление записей:*\n"
+        "Ошибся при вводе? Нажми 'Удалить еду' и выбери неверную запись.\n\n"
+        
+        "🆘 *8. Подсказка:*\n"
         "Нажми Help, чтобы снова открыть эту инструкцию.\n\n"
         
         "⚙️ Бот автоматически считает всё за день, сравнивает с твоей нормой и напоминает, если ты что-то забыл.\n\n"
@@ -1221,24 +1333,25 @@ if __name__ == '__main__':
     
     # Обработчик кнопок и ввода данных
     button_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^(⚖️ Track вес|👣 Track шаги|📊 Summary|🔥 Burn|🍎 Любимые блюда|🗑️ Удалить еду|❓ Help|⚙️ Режим)$'), handle_button)],
-        states={
-            WEIGHT_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_weight_menu)],
-            STEPS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_steps_menu)],
-            INPUT_WEIGHT_TODAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_weight_today)],
-            INPUT_WEIGHT_YESTERDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_weight_yesterday)],
-            INPUT_STEPS_TODAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_steps_today)],
-            INPUT_STEPS_YESTERDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_steps_yesterday)],
-            INPUT_BURN: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_burn)],
-            CHANGE_DEFICIT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_deficit_mode)],
-            DELETE_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_selection)],
-            DELETE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_confirm)],
-            FAVORITE_MEALS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_favorite_meals_menu)],
-        },
-        fallbacks=[
-            CommandHandler('start', start),
-        ]
-    )
+    entry_points=[MessageHandler(filters.Regex('^(⚖️ Track вес|👣 Track шаги|📊 Summary|🔥 Burn|🍎 Любимые блюда|📈 Графики|🗑️ Удалить еду|❓ Help|⚙️ Режим)$'), handle_button)],
+    states={
+        WEIGHT_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_weight_menu)],
+        STEPS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_steps_menu)],
+        INPUT_WEIGHT_TODAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_weight_today)],
+        INPUT_WEIGHT_YESTERDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_weight_yesterday)],
+        INPUT_STEPS_TODAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_steps_today)],
+        INPUT_STEPS_YESTERDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_steps_yesterday)],
+        INPUT_BURN: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_burn)],
+        CHANGE_DEFICIT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_deficit_mode)],
+        DELETE_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_selection)],
+        DELETE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_confirm)],
+        FAVORITE_MEALS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_favorite_meals_menu)],
+        CHARTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_charts_menu)],  # НОВОЕ СОСТОЯНИЕ
+    },
+    fallbacks=[
+        CommandHandler('start', start),
+    ]
+)
 
     # ВАЖНО: Добавляем обработчики в правильном порядке!
     app.add_handler(start_conv)
