@@ -248,6 +248,63 @@ def get_burned_calories(user_id: int, date: date) -> int:
         print(f"❌ Failed to get burned calories: {e}")
         return 0
 
+#-------------------------- Delete Meal --------------------------
+def get_meals_for_date(user_id: int, d: date):
+    """Получает список всех приемов пищи за день с ID"""
+    try:
+        print(f"🔍 DEBUG: Getting meals for user {user_id} on {d}")
+        
+        res = supabase.table("meals").select("id, description, calories, protein, fat, carbs, created_at") \
+            .eq("user_id", str(user_id)) \
+            .eq("date", str(d)) \
+            .order("created_at", desc=False) \
+            .execute()
+            
+        print(f"🔍 DEBUG: Raw meals data: {res.data}")
+        
+        if res.data:
+            for i, meal in enumerate(res.data):
+                print(f"🔍 DEBUG: Meal {i+1} - ID: {meal['id']} (type: {type(meal['id'])})")
+                print(f"🔍 DEBUG: Meal {i+1} - Description: {meal['description']}")
+        
+        return res.data if res.data else []
+    except Exception as e:
+        print(f"❌ Failed to get meals for date: {e}")
+        import traceback
+        print(f"❌ Full traceback: {traceback.format_exc()}")
+        return []
+
+def delete_meal(meal_id: str) -> bool:
+    """Удаляет прием пищи по ID с использованием service_role для обхода RLS"""
+    try:
+        print(f"🔍 DEBUG: Attempting to delete meal with ID: {meal_id}")
+        
+        # Используем service_role клиент для обхода RLS
+        delete_result = supabase_admin.table("meals").delete().eq("id", meal_id).execute()
+        print(f"🔍 DEBUG: Delete result: {delete_result}")
+        print(f"🔍 DEBUG: Deleted data: {delete_result.data}")
+        
+        # Проверяем успешность по количеству удаленных записей
+        success = delete_result.data is not None and len(delete_result.data) > 0
+        print(f"✅ DELETE SUCCESS: {success}")
+        
+        return success
+        
+    except Exception as e:
+        print(f"❌ Failed to delete meal: {e}")
+        import traceback
+        print(f"❌ Full traceback: {traceback.format_exc()}")
+        return False
+
+def get_meal_by_id(meal_id: str):
+    """Получает прием пищи по ID для подтверждения"""
+    try:
+        res = supabase.table("meals").select("*").eq("id", meal_id).single().execute()
+        return res.data if res.data else None
+    except Exception as e:
+        print(f"❌ Failed to get meal by ID: {e}")
+        return None
+    
 # ───────────────────────── Images Storage ───────────────────────
 def get_image_url(file_name: str) -> str:
     """Получает приватный URL картинки с токеном доступа"""
@@ -304,6 +361,89 @@ def has_meals_in_timerange(user_id: int, d: date, start_hour: int, end_hour: int
     except Exception as e:
         print(f"❌ Error checking meals: {e}")
         return False  # В случае ошибки считаем, что еды не было
+    
+    # ───────────────────────── Favorite Meals ─────────────────────────
+
+def save_favorite_meal(user_id: int, name: str, description: str, calories: int, protein: float, fat: float, carbs: float) -> bool:
+    """Сохраняет блюдо в избранное"""
+    try:
+        # Проверяем, нет ли уже такого блюда
+        existing = supabase.table("favorite_meals").select("id") \
+            .eq("user_id", str(user_id)) \
+            .eq("name", name) \
+            .execute()
+        
+        if existing.data:
+            print(f"⚠️ Favorite meal '{name}' already exists for user {user_id}")
+            return False
+        
+        # Сохраняем новое любимое блюдо
+        supabase.table("favorite_meals").insert({
+            "user_id": str(user_id),
+            "name": name,
+            "description": description,
+            "calories": calories,
+            "protein": protein,
+            "fat": fat,
+            "carbs": carbs,
+            "usage_count": 0
+        }).execute()
+        
+        print(f"✅ Saved favorite meal '{name}' for user {user_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to save favorite meal: {e}")
+        return False
+
+def get_favorite_meals(user_id: int):
+    """Получает список любимых блюд пользователя"""
+    try:
+        res = supabase.table("favorite_meals").select("*") \
+            .eq("user_id", str(user_id)) \
+            .order("usage_count", desc=True) \
+            .order("name", desc=False) \
+            .execute()
+        return res.data if res.data else []
+    except Exception as e:
+        print(f"❌ Failed to get favorite meals: {e}")
+        return []
+
+def use_favorite_meal(user_id: int, favorite_id: str) -> dict:
+    """Использует любимое блюдо (увеличивает счетчик и возвращает данные)"""
+    try:
+        # Получаем блюдо
+        meal = supabase.table("favorite_meals").select("*") \
+            .eq("id", favorite_id) \
+            .eq("user_id", str(user_id)) \
+            .single().execute()
+        
+        if not meal.data:
+            return None
+        
+        # Увеличиваем счетчик использования
+        supabase.table("favorite_meals") \
+            .update({"usage_count": meal.data["usage_count"] + 1}) \
+            .eq("id", favorite_id) \
+            .execute()
+        
+        return meal.data
+        
+    except Exception as e:
+        print(f"❌ Failed to use favorite meal: {e}")
+        return None
+
+def delete_favorite_meal(user_id: int, favorite_id: str) -> bool:
+    """Удаляет любимое блюдо"""
+    try:
+        supabase_admin.table("favorite_meals").delete() \
+            .eq("id", favorite_id) \
+            .eq("user_id", str(user_id)) \
+            .execute()
+        return True
+    except Exception as e:
+        print(f"❌ Failed to delete favorite meal: {e}")
+        return False
 
 # В самый конец файла:
 __all__ = [
@@ -311,6 +451,8 @@ __all__ = [
     "get_nutrition_for_date", "get_steps_for_date", "steps_exist_for_date",
     "user_exists", "save_user_data", "get_user_targets", "get_user_profile",
     "save_burned_calories", "get_burned_calories",
-    "supabase",
-    "has_meals_in_timerange"  # Для проверки приемов пищи
+    "get_meals_for_date", "delete_meal", "get_meal_by_id",
+    "save_favorite_meal", "get_favorite_meals", "use_favorite_meal", "delete_favorite_meal",  # НОВЫЕ ФУНКЦИИ
+    "supabase", "init_storage", "get_image_url", "set_deficit_mode",
+    "has_meals_in_timerange"
 ]

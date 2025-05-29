@@ -38,7 +38,9 @@ from clients.supabase_client import (
     steps_exist_for_date, user_exists, save_user_data,
     get_user_targets, get_user_profile, supabase,
     save_burned_calories, get_burned_calories, get_image_url,
-    init_storage, set_deficit_mode, has_meals_in_timerange
+    init_storage, set_deficit_mode, has_meals_in_timerange,
+    get_meals_for_date, delete_meal, get_meal_by_id,
+    save_favorite_meal, get_favorite_meals, use_favorite_meal, delete_favorite_meal  # НОВЫЕ ФУНКЦИИ
 )
 
 from clients.messages import (
@@ -52,7 +54,7 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN")
 ZONE = ZoneInfo("Europe/Vilnius")
 
-ASK_WEIGHT, ASK_HEIGHT, ASK_GENDER, ASK_FAT, ASK_DEFICIT_MODE, CONFIRM_HELP, INPUT_WEIGHT_TODAY, INPUT_WEIGHT_YESTERDAY, INPUT_STEPS_TODAY, INPUT_STEPS_YESTERDAY, INPUT_BURN, CHANGE_DEFICIT_MODE, WEIGHT_MENU, STEPS_MENU = range(14)
+ASK_WEIGHT, ASK_HEIGHT, ASK_GENDER, ASK_FAT, ASK_DEFICIT_MODE, CONFIRM_HELP, INPUT_WEIGHT_TODAY, INPUT_WEIGHT_YESTERDAY, INPUT_STEPS_TODAY, INPUT_STEPS_YESTERDAY, INPUT_BURN, CHANGE_DEFICIT_MODE, WEIGHT_MENU, STEPS_MENU, DELETE_MENU, DELETE_CONFIRM, SAVE_FAVORITE_MENU, FAVORITE_MEALS_MENU, FAVORITE_MEAL_SELECT = range(19)
 
 # ────────────────────────── Мотивация ───────────────────────────
 WEIGHT_LOSS_MESSAGES = [
@@ -75,6 +77,7 @@ WEIGHT_GAIN_MESSAGES = [
 reply_keyboard = [
     ["⚖️ Track вес", "👣 Track шаги"],
     ["📊 Summary", "🔥 Burn"],
+    ["🍎 Любимые блюда", "🗑️ Удалить еду"],  # НОВАЯ КНОПКА
     ["❓ Help", "⚙️ Режим"]
 ]
 markup = ReplyKeyboardMarkup(
@@ -109,6 +112,17 @@ steps_keyboard = [
 ]
 steps_markup = ReplyKeyboardMarkup(steps_keyboard, resize_keyboard=True)
 
+#Добавьте клавиатуру подтверждения удаления:
+delete_confirm_keyboard = [["✅ Да, удалить", "❌ Отмена"]]
+delete_confirm_markup = ReplyKeyboardMarkup(delete_confirm_keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+# Клавиатура для сохранения в избранное
+save_favorite_keyboard = [["💾 Сохранить как любимое", "❌ Не сохранять"]]
+save_favorite_markup = ReplyKeyboardMarkup(save_favorite_keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+# Клавиатура для работы с избранными
+favorite_back_keyboard = [["🔙 Назад"]]
+favorite_back_markup = ReplyKeyboardMarkup(favorite_back_keyboard, resize_keyboard=True)
 # ─────────────────── Helpers ──────────────────────────
 def now_vilnius():
     return datetime.now(ZONE)
@@ -315,35 +329,188 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         total = result["total"]
         breakdown = result["breakdown"]
         breakdown_text = "\n".join(
-    f"- {item['item']}: {round(item['calories'])} ккал, Б: {round(item['protein'], 1)}г, Ж: {round(item['fat'], 1)}г, У: {round(item['carbs'], 1)}г"
-    for item in breakdown
-)
-
+            f"- {item['item']}: {round(item['calories'])} ккал, Б: {round(item['protein'], 1)}г, Ж: {round(item['fat'], 1)}г, У: {round(item['carbs'], 1)}г"
+            for item in breakdown
+        )
 
         reply_text = (
             f"🍽️ *Разбор еды:*\n"
             f"{breakdown_text}\n\n"
             f"*Итого:* {round(total['calories'])} ккал\n"
-f"Б: {round(total['protein'], 1)}г | Ж: {round(total['fat'], 1)}г | У: {round(total['carbs'], 1)}г"
-
+            f"Б: {round(total['protein'], 1)}г | Ж: {round(total['fat'], 1)}г | У: {round(total['carbs'], 1)}г\n\n"
             f"_{comment}_"
         )
         await update.message.reply_text(reply_text, parse_mode="Markdown")
 
+        # Сохраняем прием пищи
         save_meal(
-    user_id,
-    caption or "[Фото]",
-    round(total["calories"]),
-    round(total["protein"], 1),
-    round(total["fat"], 1),
-    round(total["carbs"], 1)
-)
+            user_id,
+            caption or "[Фото]",
+            round(total["calories"]),
+            round(total["protein"], 1),
+            round(total["fat"], 1),
+            round(total["carbs"], 1)
+        )
+
+        # НОВОЕ: Предлагаем сохранить в избранное
+        ctx.user_data['last_meal'] = {
+            'name': caption or "[Фото]",
+            'description': caption if is_detailed_description(caption) else ingredients,
+            'calories': round(total["calories"]),
+            'protein': round(total["protein"], 1),
+            'fat': round(total["fat"], 1),
+            'carbs': round(total["carbs"], 1)
+        }
+        
+        await update.message.reply_text(
+            "💾 Хотите сохранить это блюдо в избранное для быстрого добавления в будущем?",
+            reply_markup=save_favorite_markup
+        )
+        return SAVE_FAVORITE_MENU
 
     except Exception as e:
         print("❌ Ошибка при разборе фото:", e)
         await update.message.reply_text("Произошла ошибка. Попробуйте ещё раз.")
 
+async def handle_save_favorite_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает решение о сохранении в избранное"""
+    txt = update.message.text
+    
+    if txt == "❌ Не сохранять":
+        await update.message.reply_text("👍 Понятно, не сохраняем.", reply_markup=markup)
+        return ConversationHandler.END
+    
+    if txt == "💾 Сохранить как любимое":
+        last_meal = ctx.user_data.get('last_meal')
+        if not last_meal:
+            await update.message.reply_text("❌ Данные потерялись. Попробуйте еще раз.", reply_markup=markup)
+            return ConversationHandler.END
+        
+        await update.message.reply_text(
+            "✏️ Введите название для этого блюда в избранном:\n"
+            "Например: 'Моя овсянка с бананом'",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return SAVE_FAVORITE_MENU
+    
+    # Если ввели название блюда
+    if 'last_meal' in ctx.user_data:
+        meal_name = txt.strip()
+        if len(meal_name) < 2:
+            await update.message.reply_text("⚠️ Название слишком короткое. Попробуйте еще раз:")
+            return SAVE_FAVORITE_MENU
+        
+        last_meal = ctx.user_data['last_meal']
+        user_id = update.effective_user.id
+        
+        success = save_favorite_meal(
+            user_id,
+            meal_name,
+            last_meal['description'],
+            last_meal['calories'],
+            last_meal['protein'],
+            last_meal['fat'],
+            last_meal['carbs']
+        )
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ Блюдо '{meal_name}' сохранено в избранном!\n"
+                f"Теперь его можно быстро добавить через кнопку '🍎 Любимые блюда'.",
+                reply_markup=markup
+            )
+        else:
+            await update.message.reply_text(
+                f"⚠️ Блюдо с таким названием уже существует в избранном.\n"
+                f"Попробуйте другое название:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return SAVE_FAVORITE_MENU
+        
+        # Очищаем временные данные
+        ctx.user_data.pop('last_meal', None)
+        return ConversationHandler.END
 
+async def show_favorite_meals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показывает список любимых блюд"""
+    user_id = update.effective_user.id
+    favorites = get_favorite_meals(user_id)
+    
+    if not favorites:
+        await update.message.reply_text(
+            "🤷‍♂️ У вас пока нет любимых блюд.\n"
+            "Добавьте фото еды и сохраните блюдо в избранное!",
+            reply_markup=markup
+        )
+        return ConversationHandler.END
+    
+    # Формируем список
+    favorites_text = "🍎 *Ваши любимые блюда:*\n\n"
+    ctx.user_data['favorites_list'] = {}
+    
+    for i, fav in enumerate(favorites, 1):
+        usage_text = f"(использовано {fav['usage_count']} раз)" if fav['usage_count'] > 0 else "(новое)"
+        favorites_text += f"*{i}.* {fav['name']} {usage_text}\n"
+        favorites_text += f"    {fav['calories']} ккал, Б: {fav['protein']}г, Ж: {fav['fat']}г, У: {fav['carbs']}г\n\n"
+        
+        # Сохраняем соответствие
+        ctx.user_data['favorites_list'][str(i)] = fav['id']
+    
+    favorites_text += "Введите номер блюда (1, 2, 3...) чтобы добавить его в дневник:"
+    
+    await update.message.reply_text(
+        favorites_text,
+        parse_mode="Markdown",
+        reply_markup=favorite_back_markup
+    )
+    return FAVORITE_MEALS_MENU
+
+async def handle_favorite_meals_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает выбор любимого блюда"""
+    txt = update.message.text.strip()
+    
+    if txt == "🔙 Назад":
+        await update.message.reply_text("Выберите действие:", reply_markup=markup)
+        return ConversationHandler.END
+    
+    if not txt.isdigit():
+        await update.message.reply_text("⚠️ Введите номер блюда или нажмите 'Назад':")
+        return FAVORITE_MEALS_MENU
+    
+    favorites_dict = ctx.user_data.get('favorites_list', {})
+    if txt not in favorites_dict:
+        await update.message.reply_text("⚠️ Неверный номер. Попробуйте еще раз:")
+        return FAVORITE_MEALS_MENU
+    
+    # Используем любимое блюдо
+    user_id = update.effective_user.id
+    favorite_id = favorites_dict[txt]
+    meal_data = use_favorite_meal(user_id, favorite_id)
+    
+    if not meal_data:
+        await update.message.reply_text("❌ Ошибка при добавлении блюда.", reply_markup=markup)
+        return ConversationHandler.END
+    
+    # Сохраняем в дневник
+    save_meal(
+        user_id,
+        meal_data['name'],
+        meal_data['calories'],
+        meal_data['protein'],
+        meal_data['fat'],
+        meal_data['carbs']
+    )
+    
+    await update.message.reply_text(
+        f"✅ Блюдо '{meal_data['name']}' добавлено в дневник!\n"
+        f"🔥 {meal_data['calories']} ккал, "
+        f"Б: {meal_data['protein']}г, Ж: {meal_data['fat']}г, У: {meal_data['carbs']}г",
+        reply_markup=markup
+    )
+    
+    # Очищаем временные данные
+    ctx.user_data.pop('favorites_list', None)
+    return ConversationHandler.END
 # ─────────────────── Обработчики кнопок ─────────────────────────
 
 async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -366,6 +533,10 @@ async def handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if txt == "🔥 Burn":
         await update.message.reply_text("Введи потраченные калории за активность:")
         return INPUT_BURN
+    if txt == "🍎 Любимые блюда":  # НОВЫЙ ОБРАБОТЧИК
+        return await show_favorite_meals(update, ctx)
+    if txt == "🗑️ Удалить еду":
+        return await show_delete_menu(update, ctx)
     if txt == "❓ Help":
         await send_help(update.effective_user.id, update)
         return ConversationHandler.END
@@ -537,6 +708,139 @@ async def handle_track(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await send_summary(uid, update, target_date=d)
         except Exception:
             await update.message.reply_text("⚠️ Не смог распознать количество шагов.")
+
+#Удаление еды
+async def show_delete_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показывает список приемов пищи за сегодня для удаления"""
+    uid = update.effective_user.id
+    today = date.today()
+    
+    meals = get_meals_for_date(uid, today)
+    
+    if not meals:
+        await update.message.reply_text(
+            "🤷‍♂️ За сегодня нет записей о еде для удаления.",
+            reply_markup=markup
+        )
+        return ConversationHandler.END
+    
+    # Формируем список с номерами
+    meal_list = "🗑️ *Выбери прием пищи для удаления:*\n\n"
+    ctx.user_data['meals_to_delete'] = {}
+    
+    for i, meal in enumerate(meals, 1):
+        # Форматируем время
+        created_time = meal.get('created_at', '')
+        if created_time:
+            try:
+                # Парсим время из ISO формата
+                from datetime import datetime
+                dt = datetime.fromisoformat(created_time.replace('Z', '+00:00'))
+                time_str = dt.strftime('%H:%M')
+            except:
+                time_str = "??:??"
+        else:
+            time_str = "??:??"
+            
+        meal_list += f"*{i}.* ({time_str}) {meal['description']}\n"
+        meal_list += f"    {meal['calories']} ккал, Б: {meal['protein']}г, Ж: {meal['fat']}г, У: {meal['carbs']}г\n\n"
+        
+        # Сохраняем соответствие номера и ID
+        ctx.user_data['meals_to_delete'][str(i)] = meal['id']
+    
+    meal_list += "Напиши номер приема пищи (1, 2, 3...) или 'отмена' для выхода:"
+    
+    await update.message.reply_text(
+        meal_list,
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return DELETE_MENU
+
+async def handle_delete_selection(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает выбор приема пищи для удаления"""
+    txt = update.message.text.strip().lower()
+    
+    if txt == 'отмена':
+        await update.message.reply_text("❌ Удаление отменено.", reply_markup=markup)
+        return ConversationHandler.END
+    
+    # Проверяем, что введен номер
+    if not txt.isdigit():
+        await update.message.reply_text("⚠️ Введи номер приема пищи или 'отмена':")
+        return DELETE_MENU
+    
+    meal_number = txt
+    meals_dict = ctx.user_data.get('meals_to_delete', {})
+    
+    if meal_number not in meals_dict:
+        await update.message.reply_text("⚠️ Неверный номер. Попробуй еще раз:")
+        return DELETE_MENU
+    
+    # Получаем информацию о блюде для подтверждения
+    meal_id = meals_dict[meal_number]
+    meal_info = get_meal_by_id(meal_id)
+    
+    if not meal_info:
+        await update.message.reply_text("❌ Прием пищи не найден.", reply_markup=markup)
+        return ConversationHandler.END
+    
+    # Сохраняем ID для удаления
+    ctx.user_data['meal_to_delete_id'] = meal_id
+    
+    # Показываем подтверждение
+    confirm_text = (
+        f"🗑️ *Удалить этот прием пищи?*\n\n"
+        f"📝 {meal_info['description']}\n"
+        f"🔥 {meal_info['calories']} ккал\n"
+        f"Б: {meal_info['protein']}г, Ж: {meal_info['fat']}г, У: {meal_info['carbs']}г\n\n"
+        f"⚠️ Это действие нельзя отменить!"
+    )
+    
+    await update.message.reply_text(
+        confirm_text,
+        parse_mode="Markdown",
+        reply_markup=delete_confirm_markup
+    )
+    return DELETE_CONFIRM
+
+async def handle_delete_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Подтверждает и выполняет удаление"""
+    txt = update.message.text
+    
+    if txt == "❌ Отмена":
+        await update.message.reply_text("❌ Удаление отменено.", reply_markup=markup)
+        return ConversationHandler.END
+    
+    if txt == "✅ Да, удалить":
+        meal_id = ctx.user_data.get('meal_to_delete_id')
+        
+        if meal_id and delete_meal(meal_id):
+            await update.message.reply_text(
+                "✅ Прием пищи успешно удален!\n"
+                "Обновленная сводка:",
+                reply_markup=markup
+            )
+            # Показываем обновленную сводку
+            await send_summary(update.effective_user.id, update)
+        else:
+            await update.message.reply_text(
+                "❌ Не удалось удалить прием пищи. Попробуйте позже.",
+                reply_markup=markup
+            )
+        
+        # Очищаем временные данные
+        ctx.user_data.pop('meal_to_delete_id', None)
+        ctx.user_data.pop('meals_to_delete', None)
+        
+        return ConversationHandler.END
+    
+    # Если нажали что-то другое
+    await update.message.reply_text(
+        "⚠️ Пожалуйста, выбери один из вариантов:",
+        reply_markup=delete_confirm_markup
+    )
+    return DELETE_CONFIRM
 
 # ───────────────── Итоги ───────────────────────────────
 async def daily_summary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -780,7 +1084,7 @@ async def confirm_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 await update.message.reply_photo(
                     image_url,
-                    caption="гречка 80g, курица 200g, морковь 50g, зелень"
+                    caption="гречка 80г, курица 200г, морковь 50г, зелень"
                 )
             except Exception as e:
                 print(f"❌ Failed to send example image: {e}")
@@ -877,6 +1181,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         print(f"❌ Failed to send error message: {e}")
 
 # ───────────────── Main ────────────────────────────────
+# Замените секцию if __name__ == '__main__': на эту:
+
 if __name__ == '__main__':
     # Инициализируем хранилище
     init_storage()
@@ -899,16 +1205,23 @@ if __name__ == '__main__':
         },
         fallbacks=[
             CommandHandler('start', start),
-            MessageHandler(filters.COMMAND, lambda u, c: ConversationHandler.END),
-            MessageHandler(filters.ALL, lambda u, c: u.message.reply_text(
-                "⚠️ Что-то пошло не так. Давайте начнем сначала: /start"
-            ))
+        ]
+    )
+    
+    # Обработчик фотографий с возможностью сохранения в избранное
+    photo_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.PHOTO, handle_photo)],
+        states={
+            SAVE_FAVORITE_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_save_favorite_menu)],
+        },
+        fallbacks=[
+            CommandHandler('start', start),
         ]
     )
     
     # Обработчик кнопок и ввода данных
     button_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^(⚖️ Track вес|👣 Track шаги|📊 Summary|🔥 Burn|❓ Help|⚙️ Режим)$'), handle_button)],
+        entry_points=[MessageHandler(filters.Regex('^(⚖️ Track вес|👣 Track шаги|📊 Summary|🔥 Burn|🍎 Любимые блюда|🗑️ Удалить еду|❓ Help|⚙️ Режим)$'), handle_button)],
         states={
             WEIGHT_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_weight_menu)],
             STEPS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_steps_menu)],
@@ -918,23 +1231,63 @@ if __name__ == '__main__':
             INPUT_STEPS_YESTERDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_steps_yesterday)],
             INPUT_BURN: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_burn)],
             CHANGE_DEFICIT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_deficit_mode)],
+            DELETE_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_selection)],
+            DELETE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_confirm)],
+            FAVORITE_MEALS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_favorite_meals_menu)],
         },
         fallbacks=[
             CommandHandler('start', start),
-            MessageHandler(filters.COMMAND, lambda u, c: ConversationHandler.END),
-            MessageHandler(filters.ALL, lambda u, c: u.message.reply_text(
-                "⚠️ Неверный ввод. Используйте кнопки меню или начните сначала: /start",
-                reply_markup=markup
-            ))
         ]
     )
 
+    # ВАЖНО: Добавляем обработчики в правильном порядке!
     app.add_handler(start_conv)
-    app.add_handler(button_conv)  # Добавляем обработчик кнопок
+    app.add_handler(photo_conv)  # НОВЫЙ ОБРАБОТЧИК ФОТОГРАФИЙ
+    app.add_handler(button_conv)
+    
+    # Эти обработчики должны быть ПОСЛЕ ConversationHandler
     app.add_handler(CommandHandler('summary', daily_summary))
-    app.add_handler(CommandHandler('help', send_help))  # Добавляем обработчик help
+    app.add_handler(CommandHandler('help', send_help))
     app.add_handler(CommandHandler('keyboard', update_keyboard))
+    
+    # УБИРАЕМ старый обработчик фотографий - теперь он в photo_conv!
+    # app.add_handler(MessageHandler(filters.PHOTO, handle_photo))  # <-- УБРАТЬ ЭТУ СТРОКУ
+    
+    # Остальные обработчики
+    app.add_handler(MessageHandler(filters.Regex(r'^итоги$'), daily_summary))
+    app.add_handler(MessageHandler(filters.Regex(r'^/track'), handle_track))
+
+    # Подписка на всех
+    existing = [int(u['user_id']) for u in supabase.table('users').select('user_id').execute().data]
+    for uid in existing:
+        schedule_for_user(app.job_queue, uid)
+
+    print('🚀 Бот запущен (polling)')
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    photo_conv = ConversationHandler(
+    entry_points=[MessageHandler(filters.PHOTO, handle_photo)],
+    states={
+        SAVE_FAVORITE_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_save_favorite_menu)],
+    },
+    fallbacks=[
+        CommandHandler('start', start),
+    ]
+)
+
+    # ВАЖНО: Добавляем обработчики в правильном порядке!
+    app.add_handler(start_conv)
+    app.add_handler(button_conv)
+    
+    # Эти обработчики должны быть ПОСЛЕ ConversationHandler
+    app.add_handler(CommandHandler('summary', daily_summary))
+    app.add_handler(CommandHandler('help', send_help))
+    app.add_handler(CommandHandler('keyboard', update_keyboard))
+    
+    # КРИТИЧЕСКИ ВАЖНО: Обработчик фотографий должен быть здесь!
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    # Остальные обработчики
     app.add_handler(MessageHandler(filters.Regex(r'^итоги$'), daily_summary))
     app.add_handler(MessageHandler(filters.Regex(r'^/track'), handle_track))
 
